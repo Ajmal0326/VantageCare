@@ -1,15 +1,20 @@
 import { View, Text, SafeAreaView, StyleSheet, TextInput, TouchableOpacity, StatusBar, Alert, Modal, ActivityIndicator } from 'react-native'
-import React, { useState } from 'react'
+import React, { useContext, useState } from 'react'
 import { widthPercentageToDP as wp, heightPercentageToDP as hp } from 'react-native-responsive-screen';
 import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
+import { useNavigation } from '@react-navigation/native';
+import { ROUTES } from '../Constants';
+import { AuthContext } from '../Contexts/AuthContext';
 
 
 const Login = () => {
+  const navigation = useNavigation();
   const [UserId, onChangeUserId] = React.useState('');
   const [password, onChangepassword] = React.useState('');
   const [isLoading,setIsLoading] = useState(false);
-  
+    const { setIsLoggedIn } = useContext(AuthContext);
+
   async function loginWithUserID(userID, password) {
     try {
       setIsLoading(true);
@@ -25,9 +30,10 @@ const Login = () => {
 
       await auth().signInWithEmailAndPassword(email, password);
       setIsLoading(false);
-      Alert.alert("Logged in Successfully...",
-        `Your role is: ${role}`,);
-        
+      // Alert.alert("Logged in Successfully...",
+      //   `Your role is: ${role}`,);
+        navigation.navigate(ROUTES.Home);
+
     } catch (error) {
       console.error(error);
       setIsLoading(false);
@@ -131,7 +137,10 @@ const Loader = ({ visible }) => {
       </View>
 
       <TouchableOpacity
-        onPress={() => loginWithUserID(UserId, password)}
+        onPress={
+          // () => loginWithUserID(UserId, password)
+        ()=>  setIsLoggedIn(true)
+        }
         style={styles.button} >
         <Text style={styles.text}>Sign In</Text>
       </TouchableOpacity>
