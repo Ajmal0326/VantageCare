@@ -1,3 +1,7 @@
 export default  {
-Home :'BottomTab'
+Home :'BottomTab',
+MYPROFILE:'MyProfile',
+TIMESHEET:'TimeSheet',
+MYSHIFT:'MyShift',
+CERTIFICATES:'Certificates',
 }

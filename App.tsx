@@ -13,7 +13,9 @@ import { NavigationContainer } from '@react-navigation/native';
 import AuthNavigation from './Src/Navigations/AuthNavigation';
 import { useContext } from 'react';
 import { AuthProvider, AuthContext } from './Src/Contexts/AuthContext';
+import {UserProvider} from './Src/Contexts/UserContext';
 import BottomTab from './Src/Navigations/BottomTab';
+import { Home, MainNavigation, MyProfile } from './Src/Screens/ScreenLists';
 
 
 
@@ -22,14 +24,16 @@ function App(): React.JSX.Element {
 
 const AppNavigator = () => {
   const { isLoggedIn } = useContext(AuthContext);
-  return isLoggedIn ? <BottomTab /> : <AuthNavigation />;
+  return isLoggedIn ? <MainNavigation/> : <AuthNavigation />;
 };
 
   return (
      <AuthProvider>
+       <UserProvider>
     <NavigationContainer>
       <AppNavigator/>
     </NavigationContainer> 
+    </UserProvider>
      </AuthProvider>
   );
 }

@@ -6,14 +6,15 @@ import firestore from '@react-native-firebase/firestore';
 import { useNavigation } from '@react-navigation/native';
 import { ROUTES } from '../Constants';
 import { AuthContext } from '../Contexts/AuthContext';
-
-
+import { UserContext } from '../Contexts/UserContext';
 const Login = () => {
   const navigation = useNavigation();
   const [UserId, onChangeUserId] = React.useState('');
   const [password, onChangepassword] = React.useState('');
-  const [isLoading,setIsLoading] = useState(false);
-    const { setIsLoggedIn } = useContext(AuthContext);
+  const [isLoading, setIsLoading] = useState(false);
+  const { setIsLoggedIn } = useContext(AuthContext);
+  const { setUserName, setUserRole } = useContext(UserContext);
+
 
   async function loginWithUserID(userID, password) {
     try {
@@ -27,76 +28,84 @@ const Login = () => {
 
       const email = doc.data().email;
       const role = doc.data().role;
+      const name = doc.data().name;
+
 
       await auth().signInWithEmailAndPassword(email, password);
+      setUserName(name);
+      setUserRole(role);
       setIsLoading(false);
       // Alert.alert("Logged in Successfully...",
       //   `Your role is: ${role}`,);
-        navigation.navigate(ROUTES.Home);
-
+      setIsLoggedIn(true);
     } catch (error) {
       console.error(error);
       setIsLoading(false);
       if (error.code === 'auth/invalid-email') {
         Alert.alert('Invalid Email', 'The email address is badly formatted.');
+        setIsLoading(false);
       } else if (error.code === 'auth/user-not-found') {
         Alert.alert('User Not Found', 'No user found with this email.');
+        setIsLoading(false);
       } else if (error.code === 'auth/wrong-password') {
         Alert.alert('Wrong Password', 'The password is incorrect.');
+        setIsLoading(false);
       }
       else if (error.code === 'auth/invalid-credential') {
         Alert.alert('Wrong Password', 'The password is incorrect.');
+        setIsLoading(false);
       }
     }
   }
 
-const handleForgotPassword = async (userID) => {
+  const handleForgotPassword = async (userID) => {
 
-  try {
-    setIsLoading(true);
+    try {
+      setIsLoading(true);
       const doc = await firestore().collection('UsersDetail').doc(userID).get();
       if (!doc.exists) {
+        setIsLoading(false);
         Alert.alert("User ID not found Enter Correct User Id to Reset Password.");
         return;
       }
 
       const email = doc.data().email;
-    await auth().sendPasswordResetEmail(email);
-    setIsLoading(false);
-    Alert.alert(
-      'Email Sent',
-      'Password reset link has been sent to your email.'
-    );
-  } catch (error) {
-    setIsLoading(false);
-    if (error.code === 'auth/invalid-email') {
-      Alert.alert('Invalid Email', 'Please enter a valid email address.');
-    } else if (error.code === 'auth/user-not-found') {
-      Alert.alert('User Not Found', 'No account exists with this email.');
-    } else {
-      Alert.alert('Error', error.message);
+      await auth().sendPasswordResetEmail(email);
+      setIsLoading(false);
+      Alert.alert(
+        'Email Sent',
+        'Password reset link has been sent to your email.'
+      );
+    } catch (error) {
+      setIsLoading(false);
+      if (error.code === 'auth/invalid-email') {
+        Alert.alert('Invalid Email', 'Please enter a valid email address.');
+      } else if (error.code === 'auth/user-not-found') {
+        Alert.alert('User Not Found', 'No account exists with this email.');
+      } else {
+        Alert.alert('Error', error.message);
+      }
     }
-  }
-};
+  };
 
 
-  
-const Loader = ({ visible }) => {
-  return (
-    <Modal
-      transparent
-      animationType="none"
-      visible={visible}
-      onRequestClose={() => {}}
-    >
-      <View style={styles.modalBackground}>
-        <View style={styles.loaderContainer}>
-          <ActivityIndicator size="large" color="#3498db" />
+
+  const Loader = ({ visible }) => {
+    return (
+      <Modal
+        transparent
+        animationType="none"
+        visible={visible}
+        onRequestClose={() => { }}
+      >
+        <View style={styles.modalBackground}>
+          <View style={styles.loaderContainer}>
+            <ActivityIndicator size="large" color="#3498db" />
+          </View>
         </View>
-      </View>
-    </Modal>
-  );
-};
+      </Modal>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.mainContainer}>
@@ -123,30 +132,34 @@ const Loader = ({ visible }) => {
           placeholder="Password"
           placeholderTextColor={"black"}
         />
-        <TouchableOpacity 
-        onPress={()=>{
-          if(UserId)
-          {handleForgotPassword(UserId)}
-        else{
-          Alert.alert("Enter your UserID to reset Password")
-        }
-        }}
-        style={styles.forgetbutton} >
+        <TouchableOpacity
+          onPress={() => {
+            if (UserId) { handleForgotPassword(UserId) }
+            else {
+              Alert.alert("Enter your UserID to reset Password")
+            }
+          }}
+          style={styles.forgetbutton} >
           <Text style={styles.forgettext}>Forgot Password?</Text>
         </TouchableOpacity>
       </View>
 
       <TouchableOpacity
         onPress={
-          // () => loginWithUserID(UserId, password)
-        ()=>  setIsLoggedIn(true)
+          () => {
+            if (UserId && password) { loginWithUserID(UserId, password) }
+            else {
+              Alert.alert("User ID and  Password both are required to login.")
+            }
+          }
+
         }
         style={styles.button} >
         <Text style={styles.text}>Sign In</Text>
       </TouchableOpacity>
 
       {/* </View> */}
-       <Loader visible={isLoading}/>
+      <Loader visible={isLoading} />
     </SafeAreaView>
   )
 }
