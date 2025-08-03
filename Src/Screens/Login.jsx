@@ -1,28 +1,78 @@
-import { View, Text, SafeAreaView, StyleSheet, TextInput, TouchableOpacity, StatusBar, Alert, Modal, ActivityIndicator } from 'react-native'
-import React, { useContext, useState } from 'react'
-import { widthPercentageToDP as wp, heightPercentageToDP as hp } from 'react-native-responsive-screen';
+import {
+  View,
+  Text,
+  SafeAreaView,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  StatusBar,
+  Alert,
+  Modal,
+  ActivityIndicator,
+  Platform,
+  PermissionsAndroid,
+} from 'react-native';
+import React, {useContext, useEffect, useState} from 'react';
+import {
+  widthPercentageToDP as wp,
+  heightPercentageToDP as hp,
+} from 'react-native-responsive-screen';
 import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
-import { useNavigation } from '@react-navigation/native';
-import { ROUTES } from '../Constants';
-import { AuthContext } from '../Contexts/AuthContext';
-import { UserContext } from '../Contexts/UserContext';
+import {useNavigation} from '@react-navigation/native';
+import {ROUTES} from '../Constants';
+import {AuthContext} from '../Contexts/AuthContext';
+import {UserContext} from '../Contexts/UserContext';
+import messaging from '@react-native-firebase/messaging';
+
 const Login = () => {
   const navigation = useNavigation();
   const [UserId, onChangeUserId] = React.useState('');
   const [password, onChangepassword] = React.useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const { setIsLoggedIn } = useContext(AuthContext);
-  const { setUserName, setUserRole } = useContext(UserContext);
+  const {setIsLoggedIn} = useContext(AuthContext);
+  const {setUserName, setUserRole} = useContext(UserContext);
+  const [fcmtoken, setfcmtoken] = useState();
+  const requestUserPermission = async () => {
+    // const authStatus = await messaging().requestPermission();
+    // const enabled =
+    //   authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+    //   authStatus === messaging.AuthorizationStatus.PROVISIONAL;
 
+    // if (enabled) {
+    //   console.log('Authorization status:', authStatus);
+    // }
+    if (Platform.OS === 'android' && Platform.Version >= 33) {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+      );
+      if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+        getFCMToken();
+        console.log('Notification permission granted');
+      } else {
+        console.log('Notification permission denied');
+      }
+    }
+  };
+
+  const getFCMToken = async () => {
+    await messaging().registerDeviceForRemoteMessages();
+    const fcmToken = await messaging().getToken();
+    console.log('fcm token is :', fcmToken);
+    if (fcmToken) {
+      setfcmtoken(fcmToken);
+      console.log('FCM Token:', fcmToken);
+      // Save this token to Firestore if needed
+    }
+  };
 
   async function loginWithUserID(userID, password) {
     try {
       setIsLoading(true);
       const doc = await firestore().collection('UsersDetail').doc(userID).get();
-      console.log("doc is :", doc);
+      console.log('doc is :', doc);
       if (!doc.exists) {
-        Alert.alert("User ID not found");
+        Alert.alert('User ID not found');
         return;
       }
 
@@ -30,11 +80,15 @@ const Login = () => {
       const role = doc.data().role;
       const name = doc.data().name;
 
-
       await auth().signInWithEmailAndPassword(email, password);
+      console.log("token and name is :",UserId,"toke : ",fcmtoken);
+      await firestore().collection('UsersDetail').doc(UserId).update({
+        fcmToken: fcmtoken,
+      });
       setUserName(name);
       setUserRole(role);
       setIsLoading(false);
+
       // Alert.alert("Logged in Successfully...",
       //   `Your role is: ${role}`,);
       setIsLoggedIn(true);
@@ -50,22 +104,22 @@ const Login = () => {
       } else if (error.code === 'auth/wrong-password') {
         Alert.alert('Wrong Password', 'The password is incorrect.');
         setIsLoading(false);
-      }
-      else if (error.code === 'auth/invalid-credential') {
+      } else if (error.code === 'auth/invalid-credential') {
         Alert.alert('Wrong Password', 'The password is incorrect.');
         setIsLoading(false);
       }
     }
   }
 
-  const handleForgotPassword = async (userID) => {
-
+  const handleForgotPassword = async userID => {
     try {
       setIsLoading(true);
       const doc = await firestore().collection('UsersDetail').doc(userID).get();
       if (!doc.exists) {
         setIsLoading(false);
-        Alert.alert("User ID not found Enter Correct User Id to Reset Password.");
+        Alert.alert(
+          'User ID not found Enter Correct User Id to Reset Password.',
+        );
         return;
       }
 
@@ -74,7 +128,7 @@ const Login = () => {
       setIsLoading(false);
       Alert.alert(
         'Email Sent',
-        'Password reset link has been sent to your email.'
+        'Password reset link has been sent to your email.',
       );
     } catch (error) {
       setIsLoading(false);
@@ -88,16 +142,17 @@ const Login = () => {
     }
   };
 
+  useEffect(() => {
+    requestUserPermission();
+  }, []);
 
-
-  const Loader = ({ visible }) => {
+  const Loader = ({visible}) => {
     return (
       <Modal
         transparent
         animationType="none"
         visible={visible}
-        onRequestClose={() => { }}
-      >
+        onRequestClose={() => {}}>
         <View style={styles.modalBackground}>
           <View style={styles.loaderContainer}>
             <ActivityIndicator size="large" color="#3498db" />
@@ -109,62 +164,57 @@ const Login = () => {
 
   return (
     <SafeAreaView style={styles.mainContainer}>
-      <StatusBar
-        barStyle="dark-content"
-        backgroundColor="#6a51ae"
-      />
+      <StatusBar barStyle="dark-content" backgroundColor="#6a51ae" />
       {/* <View style={styles.subCtn}> */}
       <Text style={styles.headingTxt}>Vantage Care</Text>
 
-      <View style={{ height: hp('40%'), justifyContent: 'center' }}>
-
+      <View style={{height: hp('40%'), justifyContent: 'center'}}>
         <TextInput
           style={styles.input}
           onChangeText={onChangeUserId}
           value={UserId}
           placeholder="UserID"
-          placeholderTextColor={"black"}
+          placeholderTextColor={'black'}
         />
         <TextInput
           style={styles.input}
           onChangeText={onChangepassword}
           value={password}
           placeholder="Password"
-          placeholderTextColor={"black"}
+          placeholderTextColor={'black'}
         />
         <TouchableOpacity
           onPress={() => {
-            if (UserId) { handleForgotPassword(UserId) }
-            else {
-              Alert.alert("Enter your UserID to reset Password")
+            if (UserId) {
+              handleForgotPassword(UserId);
+            } else {
+              Alert.alert('Enter your UserID to reset Password');
             }
           }}
-          style={styles.forgetbutton} >
+          style={styles.forgetbutton}>
           <Text style={styles.forgettext}>Forgot Password?</Text>
         </TouchableOpacity>
       </View>
 
       <TouchableOpacity
-        onPress={
-          () => {
-            if (UserId && password) { loginWithUserID(UserId, password) }
-            else {
-              Alert.alert("User ID and  Password both are required to login.")
-            }
+        onPress={() => {
+          if (UserId && password) {
+            loginWithUserID(UserId, password);
+          } else {
+            Alert.alert('User ID and  Password both are required to login.');
           }
-
-        }
-        style={styles.button} >
+        }}
+        style={styles.button}>
         <Text style={styles.text}>Sign In</Text>
       </TouchableOpacity>
 
       {/* </View> */}
       <Loader visible={isLoading} />
     </SafeAreaView>
-  )
-}
+  );
+};
 
-export default Login
+export default Login;
 
 const styles = StyleSheet.create({
   mainContainer: {
@@ -181,7 +231,7 @@ const styles = StyleSheet.create({
     borderRadius: 25,
     elevation: 5,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: {width: 0, height: 2},
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
   },
@@ -205,7 +255,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     elevation: 5,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: {width: 0, height: 2},
     shadowOpacity: 0.2,
     shadowRadius: 3,
     alignItems: 'center',
@@ -222,7 +272,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 15,
     borderRadius: 5,
-    marginLeft: 'auto'
+    marginLeft: 'auto',
   },
   forgettext: {
     color: '#0000FF',
@@ -241,4 +291,4 @@ const styles = StyleSheet.create({
     padding: 20,
     borderRadius: 10,
   },
-})
+});

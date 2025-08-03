@@ -18,10 +18,10 @@ const MyProfile = () => {
   try {
     await auth().signOut();
     setIsLoggedIn(false); 
-     Alert.alert("Logout Successful", "You have been signed out.");
+    //  Alert.alert("Logout Successful", "You have been signed out.");
   } catch (error) {
     console.error("Logout error:", error);
-    Alert.alert("Logout Failed", "An error occurred during logout.");
+    // Alert.alert("Logout Failed", "An error occurred during logout.");
   }
 }
     return (
