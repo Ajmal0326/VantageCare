@@ -31,7 +31,7 @@ const Login = () => {
   const [password, onChangepassword] = React.useState('');
   const [isLoading, setIsLoading] = useState(false);
   const {setIsLoggedIn} = useContext(AuthContext);
-  const {setUserName, setUserRole} = useContext(UserContext);
+  const {setUserName, setUserRole,setUserID} = useContext(UserContext);
   const [fcmtoken, setfcmtoken] = useState();
   const requestUserPermission = async () => {
     // const authStatus = await messaging().requestPermission();
@@ -87,6 +87,7 @@ const Login = () => {
       });
       setUserName(name);
       setUserRole(role);
+      setUserID(userID)
       setIsLoading(false);
 
       // Alert.alert("Logged in Successfully...",
@@ -108,6 +109,8 @@ const Login = () => {
         Alert.alert('Wrong Password', 'The password is incorrect.');
         setIsLoading(false);
       }
+    } finally{
+       setIsLoading(false);
     }
   }
 

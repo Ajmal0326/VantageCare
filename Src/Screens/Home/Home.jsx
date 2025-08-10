@@ -86,10 +86,10 @@ const Home = () => {
       </View>
 
       <View style={{ flexDirection: 'row', marginBottom: hp(5), justifyContent: 'space-around', marginTop: 'auto' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <TouchableOpacity onPress={()=> navigation.navigate(ROUTES.MESSAGES)} style={{ flexDirection: 'row', alignItems: 'center' }}>
           <Text style={[styles.textbtn, { marginRight: hp(1) }]}>Messages</Text>
           <Feather name="bell" size={22} color={primarycolor} />
-        </View>
+        </TouchableOpacity>
         <TouchableOpacity onPress={()=>logoutUser()} style={{ flexDirection: 'row', alignItems: 'center' }}>
 
           <Text style={[styles.textbtn, { marginRight: hp(1) }]}>LogOut</Text>
