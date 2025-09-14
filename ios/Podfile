@@ -5,31 +5,39 @@ require Pod::Executable.execute_command('node', ['-p',
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
-platform :ios, min_ios_version_supported
+# RN 0.78.x + Hermes typically requires iOS 15.6+
+platform :ios, '15.6'
+
 prepare_react_native_project!
 
-linkage = ENV['USE_FRAMEWORKS']
-if linkage != nil
-  Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green
-  use_frameworks! :linkage => linkage.to_sym
-end
+# ✅ Use frameworks (static) so Swift pods expose their generated headers
+use_frameworks! :linkage => :static
 
 target 'VantageCareApp' do
   config = use_native_modules!
 
   use_react_native!(
     :path => config[:reactNativePath],
-    # An absolute path to your application root.
+    :hermes_enabled => true,                     # Keep Hermes on
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
   post_install do |installer|
-    # https://github.com/facebook/react-native/blob/main/packages/react-native/scripts/react_native_pods.rb#L197-L202
     react_native_post_install(
       installer,
       config[:reactNativePath],
       :mac_catalyst_enabled => false,
-      # :ccache_enabled => true
     )
+
+    # Force a uniform iOS deployment target for every pod
+    installer.pods_project.targets.each do |t|
+      t.build_configurations.each do |cfg|
+        cfg.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.6'
+        # Make sure modules are enabled everywhere
+        cfg.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
+        # Ensure Swift is available (helps with some Swift header generation)
+        cfg.build_settings['SWIFT_VERSION'] = '5.0'
+      end
+    end
   end
 end
