@@ -31,6 +31,7 @@ const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov
 const WEEKDAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
 const safeStr = (v) => (typeof v === 'string' ? v.trim() : v ?? '');
+const isPending = (s) => safeStr(s?.status || '').toLowerCase() === 'pending';
 
 function normalizeYMD(input) {
   const s = safeStr(input);
@@ -61,6 +62,16 @@ function normalizeHM(input) {
     return `${String(h).padStart(2,'0')}:${String(min).padStart(2,'0')}`;
   }
   return s;
+}
+
+// step HH:mm by "delta" minutes, clamped 00:00..23:59
+function stepHM(hm, delta = 15) {
+  const [H, M] = normalizeHM(hm || '00:00').split(':').map((n) => parseInt(n || '0', 10));
+  let total = H * 60 + M + delta;
+  total = Math.max(0, Math.min(1439, total));
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
 }
 
 function localDateFrom(ymdStr, hmStr = '00:00') {
@@ -150,9 +161,16 @@ const TimeSheet = () => {
   const [weekStart, setWeekStart] = useState(startOfIsoWeek(new Date()));
   const weekEnd = useMemo(() => addDays(weekStart, 6), [weekStart]);
 
+  const [userDocId, setUserDocId] = useState(null);
+  const [allShiftsRaw, setAllShiftsRaw] = useState([]); // full raw array from Firestore
+
   const [myWeekShifts, setMyWeekShifts] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+
+  // inline editor state
+  const [editing, setEditing] = useState(null); // { idx, start, end, key:{date,start,end,role} }
 
   const weekDays = useMemo(
     () => Array.from({ length: 7 }, (_, i) => {
@@ -161,6 +179,29 @@ const TimeSheet = () => {
     }),
     [weekStart]
   );
+
+  const computeWeek = useCallback((rawShifts) => {
+    const list = (rawShifts || []);
+    const startStr = ymd(weekStart);
+    const endStrExclusive = ymd(addDays(weekEnd, 1));
+
+    return list
+      .map((s) => ({
+        ...s,
+        shiftDate: normalizeYMD(s?.shiftDate),
+        shiftStartTime: normalizeHM(s?.shiftStartTime),
+        ...(s?.shiftEndTime ? { shiftEndTime: normalizeHM(s.shiftEndTime) } : {}),
+        status: safeStr(s?.status) || 'assigned',
+        shiftRole: safeStr(s?.shiftRole).toLowerCase(),
+      }))
+      .filter((s) => s.status.toLowerCase() !== 'cancelled')
+      .filter((s) => s.shiftDate && s.shiftDate >= startStr && s.shiftDate < endStrExclusive)
+      .sort((a, b) => {
+        const sa = parseShiftToRange(a).start?.getTime() ?? 0;
+        const sb = parseShiftToRange(b).start?.getTime() ?? 0;
+        return sa - sb;
+      });
+  }, [weekStart, weekEnd]);
 
   const fetchMyWeek = useCallback(async () => {
     const current = auth().currentUser;
@@ -173,51 +214,40 @@ const TimeSheet = () => {
     try {
       const col = firestore().collection('UsersDetail');
 
-      // Try email first; if empty and UID exists, try by uid
       let snap = email ? await col.where('email', '==', email).limit(1).get() : null;
       if ((!snap || snap.empty) && uid) {
         snap = await col.where('uid', '==', uid).limit(1).get();
       }
 
       if (!snap || snap.empty) {
+        setUserDocId(null);
+        setAllShiftsRaw([]);
         setMyWeekShifts([]);
         setLoading(false);
         return;
       }
 
+      const docId = snap.docs[0].id;
       const docData = snap.docs[0].data();
       const rawShifts = Array.isArray(docData?.shifts) ? docData.shifts : [];
 
-      const startStr = ymd(weekStart);
-      const endStrExclusive = ymd(addDays(weekEnd, 1));
-
-      const inWeek = rawShifts
-        .map((s) => ({
-          ...s,
-          shiftDate: normalizeYMD(s?.shiftDate),
-          shiftStartTime: normalizeHM(s?.shiftStartTime),
-          ...(s?.shiftEndTime ? { shiftEndTime: normalizeHM(s.shiftEndTime) } : {}),
-          status: safeStr(s?.status) || 'assigned',
-          shiftRole: safeStr(s?.shiftRole).toLowerCase(),
-        }))
-        .filter((s) => s.status.toLowerCase() !== 'cancelled')
-        .filter((s) => s.shiftDate && s.shiftDate >= startStr && s.shiftDate < endStrExclusive)
-        .sort((a, b) => {
-          const sa = parseShiftToRange(a).start?.getTime() ?? 0;
-          const sb = parseShiftToRange(b).start?.getTime() ?? 0;
-          return sa - sb;
-        });
-
-      setMyWeekShifts(inWeek);
+      setUserDocId(docId);
+      setAllShiftsRaw(rawShifts);
+      setMyWeekShifts(computeWeek(rawShifts));
     } catch (e) {
       console.error('Timesheet fetch error:', e);
       setError('Failed to load timesheet.');
     } finally {
       setLoading(false);
     }
-  }, [weekStart, weekEnd, userID]);
+  }, [weekStart, weekEnd, userID, computeWeek]);
 
   useEffect(() => { fetchMyWeek(); }, [fetchMyWeek]);
+
+  // recompute when window changes but raw stays
+  useEffect(() => {
+    setMyWeekShifts(computeWeek(allShiftsRaw));
+  }, [weekStart, weekEnd, allShiftsRaw, computeWeek]);
 
   const assignedKeys = useMemo(() => {
     const set = new Set();
@@ -256,6 +286,117 @@ const TimeSheet = () => {
     }
     Alert.alert('Submitted', 'Your timesheet has been submitted for this week.');
   };
+
+  /* ---------------- Edit flow (same as web semantics) ---------------- */
+  function beginEdit(idx) {
+    const s = myWeekShifts[idx];
+    if (isPending(s)) {
+      Alert.alert('Awaiting approval', 'This shift already has a time-change request. You can edit again after HR responds.');
+      return;
+    }
+    setEditing({
+      idx,
+      start: normalizeHM(s.shiftStartTime || '08:00'),
+      end: normalizeHM(s.shiftEndTime || '17:00'),
+      key: {
+        date: s.shiftDate,
+        start: normalizeHM(s.shiftStartTime || ''),
+        end: normalizeHM(s.shiftEndTime || ''),
+        role: safeStr(s.shiftRole || ''),
+      },
+    });
+  }
+
+  function cancelEdit() {
+    setEditing(null);
+  }
+
+  async function saveEdit() {
+    if (!editing || !userDocId) return;
+
+    const newStart = normalizeHM(editing.start);
+    const newEnd = normalizeHM(editing.end);
+    if (!newStart || !newEnd) {
+      Alert.alert('Invalid time', 'Please enter both start and end times.');
+      return;
+    }
+
+    // Re-check pending state against the source of truth
+    const pendingNow = (allShiftsRaw || []).some((raw) => {
+      const s = {
+        ...raw,
+        shiftDate: normalizeYMD(raw?.shiftDate),
+        shiftStartTime: normalizeHM(raw?.shiftStartTime),
+        shiftEndTime: raw?.shiftEndTime ? normalizeHM(raw.shiftEndTime) : '',
+        shiftRole: safeStr(raw?.shiftRole).toLowerCase(),
+        status: safeStr(raw?.status),
+      };
+      return (
+        s.shiftDate === editing.key.date &&
+        normalizeHM(s.shiftStartTime || '') === editing.key.start &&
+        normalizeHM(s.shiftEndTime || '') === editing.key.end &&
+        safeStr(s.shiftRole || '') === safeStr(editing.key.role || '') &&
+        isPending(s)
+      );
+    });
+    if (pendingNow) {
+      Alert.alert('Awaiting approval', 'This shift is already pending approval.');
+      return;
+    }
+
+    const changed = newStart !== editing.key.start || newEnd !== editing.key.end;
+    if (!changed) {
+      setEditing(null);
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const updated = (allShiftsRaw || []).map((raw) => {
+        const s = {
+          ...raw,
+          shiftDate: normalizeYMD(raw?.shiftDate),
+          shiftStartTime: normalizeHM(raw?.shiftStartTime),
+          shiftEndTime: raw?.shiftEndTime ? normalizeHM(raw.shiftEndTime) : '',
+          shiftRole: safeStr(raw?.shiftRole).toLowerCase(),
+          status: safeStr(raw?.status),
+        };
+
+        const match =
+          s.shiftDate === editing.key.date &&
+          normalizeHM(s.shiftStartTime || '') === editing.key.start &&
+          normalizeHM(s.shiftEndTime || '') === editing.key.end &&
+          safeStr(s.shiftRole || '') === safeStr(editing.key.role || '');
+
+        if (!match) return raw;
+
+        // Do NOT overwrite live times—stash proposed change under `request`
+        return {
+          ...raw,
+          request: {
+            shiftStartTime: newStart,
+            shiftEndTime: newEnd,
+            prevStartTime: s.shiftStartTime ?? null,
+            prevEndTime: s.shiftEndTime ?? null,
+            requestedAt: firestore.Timestamp.now(),
+          },
+          status: 'pending',
+        };
+      });
+
+      await firestore().collection('UsersDetail').doc(userDocId).update({ shifts: updated });
+
+      setAllShiftsRaw(updated);
+      setMyWeekShifts(computeWeek(updated));
+      setEditing(null);
+      Alert.alert('Request sent', 'Your time change has been sent for approval.');
+    } catch (e) {
+      console.error('Save edit failed', e);
+      Alert.alert('Save failed', 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   /* ---------------- FlatList Renderers ---------------- */
   const ListHeader = () => (
@@ -299,13 +440,7 @@ const TimeSheet = () => {
   const ListFooter = () => (
     <View style={[styles.footerRow, { flexDirection: 'column', alignItems: 'stretch', gap: 8, paddingTop: hp(1.5) }]}>
       <Text style={styles.totalHours}>Total working hours: <Text style={{ fontWeight: '700' }}>{totalHours} hr</Text></Text>
-      <TouchableOpacity
-        style={[styles.primaryBtn, { alignSelf: 'stretch', marginTop: 8 }, myWeekShifts.length === 0 && { opacity: 0.5 }]}
-        onPress={onSubmitTimesheet}
-        disabled={myWeekShifts.length === 0}
-      >
-        <Text style={styles.btnText}>Submit Timesheet</Text>
-      </TouchableOpacity>
+
     </View>
   );
 
@@ -314,28 +449,95 @@ const TimeSheet = () => {
     const dateStr = item.shiftDate || (start ? ymd(start) : '');
     const timeStr = `${item.shiftRole || 'Shift'} • ${time12h(item.shiftStartTime)}${item.shiftEndTime ? ` – ${time12h(item.shiftEndTime)}` : ''}`;
 
+    const rowIsEditing = editing?.idx === index;
+
     return (
       <View style={[styles.elevatedBox, { marginBottom: hp(1.2) }]}>
-        <View style={{flexDirection:'row',justifyContent:'space-between'}}>
-          <Text>Sr.No</Text>
-          <Text>{index + 1}</Text>
-        </View>
-        <View style={{flexDirection:'row',justifyContent:'space-between'}}>
-          <Text>Date</Text>
-          <Text>{dateStr}</Text>
-        </View>
-        <View style={{flexDirection:'row',justifyContent:'space-between'}}>
+        {/* Row details */}
+        <View style={{flexDirection:'row',justifyContent:'space-between'}}><Text>Sr.No</Text><Text>{index + 1}</Text></View>
+        <View style={{flexDirection:'row',justifyContent:'space-between'}}><Text>Date</Text><Text>{dateStr}</Text></View>
+        <View style={{flexDirection:'row',justifyContent:'space-between', alignItems:'center'}}>
           <Text>Shift</Text>
-          <Text numberOfLines={1} style={{ maxWidth: wp(55), textAlign: 'right' }}>{timeStr}</Text>
+          <View style={{ maxWidth: wp(65), alignItems:'flex-end' }}>
+            <Text numberOfLines={1} style={{ textAlign: 'right' }}>{timeStr}</Text>
+            {/* If pending & has request, show the proposed times */}
+            {isPending(item) && item.request && (item.request.shiftStartTime || item.request.shiftEndTime) ? (
+              <Text style={{ color:'#92400E', fontSize:12, marginTop: 2 }}>
+                Requested: {time12h(item.request.shiftStartTime || item.shiftStartTime)}
+                {item.request.shiftEndTime ? ` – ${time12h(item.request.shiftEndTime)}` : ''}
+              </Text>
+            ) : null}
+          </View>
         </View>
-        <View style={{flexDirection:'row',justifyContent:'space-between'}}>
-          <Text>Hours</Text>
-          <Text>{fmtHours(shiftHours(item))} hr</Text>
-        </View>
-        <View style={{flexDirection:'row',justifyContent:'space-between'}}>
+        <View style={{flexDirection:'row',justifyContent:'space-between'}}><Text>Hours</Text><Text>{fmtHours(shiftHours(item))} hr</Text></View>
+        <View style={{flexDirection:'row',justifyContent:'space-between', alignItems:'center'}}>
           <Text>Status</Text>
-          <Text>{item.status ? item.status.charAt(0).toUpperCase() + item.status.slice(1) : 'Assigned'}</Text>
+          <View style={{flexDirection:'row', alignItems:'center'}}>
+            <Text>
+              {item.status ? item.status.charAt(0).toUpperCase() + item.status.slice(1) : 'Assigned'}
+            </Text>
+            {isPending(item) && (
+              <View style={{ marginLeft: 8, backgroundColor:'#FFFBEB', borderColor:'#FBBF24', borderWidth:1, paddingHorizontal:8, paddingVertical:2, borderRadius:12 }}>
+                <Text style={{ fontSize:12, color:'#92400E' }}>Awaiting approval</Text>
+              </View>
+            )}
+          </View>
         </View>
+
+        {/* Actions / Editor */}
+        {!rowIsEditing ? (
+          <View style={{ marginTop: 10, alignItems:'flex-end' }}>
+            {isPending(item) ? (
+              <View />
+            ) : (
+              <TouchableOpacity onPress={() => beginEdit(index)} style={[styles.smallBtn, { borderColor: primarycolor }]}>
+                <Text style={{ color: primarycolor, fontWeight:'600' }}>Edit</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : (
+          <View style={{ marginTop: 12, gap: 10 }}>
+            {/* Simple time steppers (15-min increments) */}
+            <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
+              <Text style={{ fontSize:13, color:'#374151' }}>Start</Text>
+              <View style={styles.stepper}>
+                <TouchableOpacity onPress={() => setEditing(p => ({ ...p, start: stepHM(p.start, -15) }))}>
+                  <AntDesign name="minus" size={18} color="#111827" />
+                </TouchableOpacity>
+                <Text style={styles.stepperValue}>{time12h(editing.start)}</Text>
+                <TouchableOpacity onPress={() => setEditing(p => ({ ...p, start: stepHM(p.start, +15) }))}>
+                  <AntDesign name="plus" size={18} color="#111827" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
+              <Text style={{ fontSize:13, color:'#374151' }}>End</Text>
+              <View style={styles.stepper}>
+                <TouchableOpacity onPress={() => setEditing(p => ({ ...p, end: stepHM(p.end, -15) }))}>
+                  <AntDesign name="minus" size={18} color="#111827" />
+                </TouchableOpacity>
+                <Text style={styles.stepperValue}>{time12h(editing.end)}</Text>
+                <TouchableOpacity onPress={() => setEditing(p => ({ ...p, end: stepHM(p.end, +15) }))}>
+                  <AntDesign name="plus" size={18} color="#111827" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={{ flexDirection:'row', justifyContent:'flex-end', gap: 10 }}>
+              <TouchableOpacity disabled={saving} onPress={cancelEdit} style={[styles.smallBtn, { borderColor:'#9CA3AF' }]}>
+                <Text style={{ color:'#374151', fontWeight:'600' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                disabled={saving}
+                onPress={saveEdit}
+                style={[styles.smallBtnFilled, saving && { opacity: 0.6 }]}
+              >
+                <Text style={{ color:'#fff', fontWeight:'700' }}>{saving ? 'Saving…' : 'Save'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
       </View>
     );
   };
@@ -369,7 +571,6 @@ const TimeSheet = () => {
         contentContainerStyle={{ paddingHorizontal: wp(5), paddingBottom: hp(4) }}
         showsVerticalScrollIndicator={false}
         initialNumToRender={10}
-        // removeClippedSubviews  // ← leave disabled to avoid clipping
       />
 
       {/* Footer actions */}
@@ -488,14 +689,36 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     padding: hp(1.2),
     backgroundColor: '#fff',
-    // iOS shadow
-    shadowColor: '#1d4ed8', // subtle blue tint
+    shadowColor: '#1d4ed8',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.18,
     shadowRadius: 8,
-    // Android elevation
     elevation: 6,
   },
+
+  smallBtn: {
+    borderWidth: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  smallBtnFilled: {
+    backgroundColor: primarycolor,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  stepper: {
+    flexDirection:'row',
+    alignItems:'center',
+    borderWidth:1,
+    borderColor:'#E5E7EB',
+    borderRadius:10,
+    paddingHorizontal:10,
+    paddingVertical:6,
+    gap:12,
+  },
+  stepperValue: { minWidth: 86, textAlign:'center', fontWeight:'600', color:'#111827' },
 });
 
 export default TimeSheet;
