@@ -1,3 +1,4 @@
+import React, {useCallback, useContext, useEffect, useState} from 'react';
 import {
   View,
   Text,
@@ -12,140 +13,163 @@ import {
   Platform,
   PermissionsAndroid,
 } from 'react-native';
-import React, {useCallback, useContext, useEffect, useState} from 'react';
 import {
   widthPercentageToDP as wp,
   heightPercentageToDP as hp,
 } from 'react-native-responsive-screen';
-import auth from '@react-native-firebase/auth';
-import firestore from '@react-native-firebase/firestore';
 import {useNavigation} from '@react-navigation/native';
-import {ROUTES} from '../Constants';
 import {AuthContext} from '../Contexts/AuthContext';
 import {UserContext} from '../Contexts/UserContext';
-import messaging from '@react-native-firebase/messaging';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons'; // 👈
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+
+// Modular RNFirebase
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+} from '@react-native-firebase/auth';
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  updateDoc,
+  serverTimestamp,
+} from '@react-native-firebase/firestore';
+import {
+  getMessaging,
+  requestPermission,
+  isDeviceRegisteredForRemoteMessages,
+  registerDeviceForRemoteMessages,
+  getToken,
+} from '@react-native-firebase/messaging';
+
+const auth = getAuth();
+const db = getFirestore();
+const msg = getMessaging();
 
 const Login = () => {
   const navigation = useNavigation();
-  const [UserId, onChangeUserId] = React.useState('');
-  const [password, onChangepassword] = React.useState('');
+  const [UserId, onChangeUserId] = useState('');
+  const [password, onChangepassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const {setIsLoggedIn} = useContext(AuthContext);
-  const {setUserName, setUserRole,setUserID} = useContext(UserContext);
-  const [fcmtoken, setfcmtoken] = useState();
+  const {setUserName, setUserRole, setUserID} = useContext(UserContext);
+
+  const [fcmtoken, setfcmtoken] = useState(null);
+
+  const [hidePass, setHidePass] = useState(true);
   const toggleHide = useCallback(() => setHidePass(p => !p), []);
-  const [hidePass, setHidePass] = useState(true); // 👈
 
+  // Notifications permission + FCM token
   const requestUserPermission = async () => {
-    // const authStatus = await messaging().requestPermission();
-    // const enabled =
-    //   authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-    //   authStatus === messaging.AuthorizationStatus.PROVISIONAL;
-
-    // if (enabled) {
-    //   console.log('Authorization status:', authStatus);
-    // }
-    if (Platform.OS === 'android' && Platform.Version >= 33) {
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-      );
-      if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-        getFCMToken();
-        console.log('Notification permission granted');
-      } else {
-        console.log('Notification permission denied');
+    try {
+      if (Platform.OS === 'android' && Platform.Version >= 33) {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          console.log('Notification permission denied');
+        }
       }
+
+      await requestPermission(msg);
+
+      const registered = await isDeviceRegisteredForRemoteMessages(msg);
+      if (!registered) await registerDeviceForRemoteMessages(msg);
+
+      const token = await getToken(msg);
+      if (token) {
+        setfcmtoken(token);
+        console.log('FCM Token:', token);
+      }
+    } catch (e) {
+      console.log('Notification setup error:', e);
     }
   };
 
-  const getFCMToken = async () => {
-    await messaging().registerDeviceForRemoteMessages();
-    const fcmToken = await messaging().getToken();
-    console.log('fcm token is :', fcmToken);
-    if (fcmToken) {
-      setfcmtoken(fcmToken);
-      console.log('FCM Token:', fcmToken);
-      // Save this token to Firestore if needed
-    }
-  };
-
-  async function loginWithUserID(userID, password) {
+  async function loginWithUserID(userID, pwd) {
     try {
       setIsLoading(true);
-      const doc = await firestore().collection('UsersDetail').doc(userID).get();
-      console.log('doc is :', doc);
-      if (!doc.exists) {
+
+      const userRef = doc(db, 'UsersDetail', userID);
+      const snap = await getDoc(userRef);
+      if (!snap.exists) {
         Alert.alert('User ID not found');
         return;
       }
 
-      const email = doc.data().email;
-      const role = doc.data().role;
-      const name = doc.data().name;
+      const data = snap.data() || {};
+      const email = data.email;
+      const role = data.role;
+      const name = data.name;
 
-      await auth().signInWithEmailAndPassword(email, password);
-      console.log("token and name is :",UserId,"toke : ",fcmtoken);
-      await firestore().collection('UsersDetail').doc(UserId).update({
-        fcmToken: fcmtoken,
-      });
-      setUserName(name);
-      setUserRole(role);
-      setUserID(userID)
-      setIsLoading(false);
+      if (!email) {
+        Alert.alert('User record has no email configured.');
+        return;
+      }
 
-      // Alert.alert("Logged in Successfully...",
-      //   `Your role is: ${role}`,);
+      await signInWithEmailAndPassword(auth, email, pwd);
+
+      // Only update fcmToken if we actually have one (avoid undefined)
+      if (fcmtoken) {
+        await updateDoc(userRef, {
+          fcmToken: fcmtoken,
+          lastLoginAt: serverTimestamp(),
+        });
+      } else {
+        await updateDoc(userRef, { lastLoginAt: serverTimestamp() });
+      }
+
+      setUserName(name || '');
+      setUserRole(role || '');
+      setUserID(userID);
+
       setIsLoggedIn(true);
     } catch (error) {
       console.error(error);
-      setIsLoading(false);
-      if (error.code === 'auth/invalid-email') {
+      const code = error && error.code;
+      if (code === 'auth/invalid-email') {
         Alert.alert('Invalid Email', 'The email address is badly formatted.');
-        setIsLoading(false);
-      } else if (error.code === 'auth/user-not-found') {
+      } else if (code === 'auth/user-not-found') {
         Alert.alert('User Not Found', 'No user found with this email.');
-        setIsLoading(false);
-      } else if (error.code === 'auth/wrong-password') {
+      } else if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
         Alert.alert('Wrong Password', 'The password is incorrect.');
-        setIsLoading(false);
-      } else if (error.code === 'auth/invalid-credential') {
-        Alert.alert('Wrong Password', 'The password is incorrect.');
-        setIsLoading(false);
+      } else {
+        Alert.alert('Login error', (error && error.message) || 'Something went wrong.');
       }
-    } finally{
-       setIsLoading(false);
+    } finally {
+      setIsLoading(false);
     }
   }
 
   const handleForgotPassword = async userID => {
     try {
       setIsLoading(true);
-      const doc = await firestore().collection('UsersDetail').doc(userID).get();
-      if (!doc.exists) {
-        setIsLoading(false);
-        Alert.alert(
-          'User ID not found Enter Correct User Id to Reset Password.',
-        );
+      const userRef = doc(db, 'UsersDetail', userID);
+      const snap = await getDoc(userRef);
+      if (!snap.exists) {
+        Alert.alert('User ID not found. Enter correct User ID to reset password.');
         return;
       }
-
-      const email = doc.data().email;
-      await auth().sendPasswordResetEmail(email);
-      setIsLoading(false);
-      Alert.alert(
-        'Email Sent',
-        'Password reset link has been sent to your email.',
-      );
+      const data = snap.data() || {};
+      const email = data.email;
+      if (!email) {
+        Alert.alert('No email found for this User ID.');
+        return;
+      }
+      await sendPasswordResetEmail(auth, email);
+      Alert.alert('Email Sent', 'Password reset link has been sent to your email.');
     } catch (error) {
-      setIsLoading(false);
-      if (error.code === 'auth/invalid-email') {
+      const code = error && error.code;
+      if (code === 'auth/invalid-email') {
         Alert.alert('Invalid Email', 'Please enter a valid email address.');
-      } else if (error.code === 'auth/user-not-found') {
+      } else if (code === 'auth/user-not-found') {
         Alert.alert('User Not Found', 'No account exists with this email.');
       } else {
-        Alert.alert('Error', error.message);
+        Alert.alert('Error', (error && error.message) || 'Something went wrong.');
       }
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -153,26 +177,19 @@ const Login = () => {
     requestUserPermission();
   }, []);
 
-  const Loader = ({visible}) => {
-    return (
-      <Modal
-        transparent
-        animationType="none"
-        visible={visible}
-        onRequestClose={() => {}}>
-        <View style={styles.modalBackground}>
-          <View style={styles.loaderContainer}>
-            <ActivityIndicator size="large" color="#3498db" />
-          </View>
+  const Loader = ({visible}) => (
+    <Modal transparent animationType="none" visible={visible} onRequestClose={() => {}}>
+      <View style={styles.modalBackground}>
+        <View style={styles.loaderContainer}>
+          <ActivityIndicator size="large" color="#3498db" />
         </View>
-      </Modal>
-    );
-  };
+      </View>
+    </Modal>
+  );
 
   return (
     <SafeAreaView style={styles.mainContainer}>
       <StatusBar barStyle="dark-content" backgroundColor="#6a51ae" />
-      {/* <View style={styles.subCtn}> */}
       <Text style={styles.headingTxt}>Vantage Care</Text>
 
       <View style={{height: hp('40%'), justifyContent: 'center'}}>
@@ -181,24 +198,29 @@ const Login = () => {
           onChangeText={onChangeUserId}
           value={UserId}
           placeholder="Username"
-          placeholderTextColor={'black'}
+          placeholderTextColor="black"
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="next"
         />
-      
-        
-         <View style={{position: 'relative', justifyContent: 'center'}}>
+
+        {/* Password with eye/eye-off toggle */}
+        <View style={{position: 'relative', justifyContent: 'center'}}>
           <TextInput
-            style={[styles.input, {paddingRight: 44}]}  
+            style={[styles.input, {paddingRight: 44}]}
             onChangeText={onChangepassword}
             value={password}
             placeholder="Password"
             placeholderTextColor="black"
             autoCapitalize="none"
             autoCorrect={false}
-            secureTextEntry={hidePass}              
+            secureTextEntry={hidePass}
             textContentType="password"
             returnKeyType="done"
+            onSubmitEditing={() => {
+              if (UserId && password) loginWithUserID(UserId, password);
+            }}
           />
-
           <TouchableOpacity
             onPress={toggleHide}
             accessibilityLabel={hidePass ? 'Show password' : 'Hide password'}
@@ -208,13 +230,11 @@ const Login = () => {
             <Icon name={hidePass ? 'eye-off' : 'eye'} size={22} />
           </TouchableOpacity>
         </View>
+
         <TouchableOpacity
           onPress={() => {
-            if (UserId) {
-              handleForgotPassword(UserId);
-            } else {
-              Alert.alert('Enter your UserID to reset Password');
-            }
+            if (UserId) handleForgotPassword(UserId);
+            else Alert.alert('Enter your UserID to reset Password');
           }}
           style={styles.forgetbutton}>
           <Text style={styles.forgettext}>Forgot Password?</Text>
@@ -226,14 +246,13 @@ const Login = () => {
           if (UserId && password) {
             loginWithUserID(UserId, password);
           } else {
-            Alert.alert('User ID and  Password both are required to login.');
+            Alert.alert('User ID and Password both are required to login.');
           }
         }}
         style={styles.button}>
         <Text style={styles.text}>Sign In</Text>
       </TouchableOpacity>
 
-      {/* </View> */}
       <Loader visible={isLoading} />
     </SafeAreaView>
   );
@@ -286,11 +305,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  text: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  text: { color: '#fff', fontSize: 16, fontWeight: '600' },
   forgetbutton: {
     marginTop: 15,
     backgroundColor: 'transparent',
