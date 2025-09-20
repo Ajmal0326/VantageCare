@@ -1,68 +1,42 @@
-import React, {useEffect} from 'react';
-import type {PropsWithChildren} from 'react';
-import {
-  Alert,
-  PermissionsAndroid,
-  Platform,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  useColorScheme,
-  View,
-} from 'react-native';
-import Login from './Src/Screens/Login';
+import React, {useEffect, useContext} from 'react';
 import {NavigationContainer} from '@react-navigation/native';
-import AuthNavigation from './Src/Navigations/AuthNavigation';
-import {useContext} from 'react';
 import {AuthProvider, AuthContext} from './Src/Contexts/AuthContext';
 import {UserProvider} from './Src/Contexts/UserContext';
-import BottomTab from './Src/Navigations/BottomTab';
-import {Home, MainNavigation, MyProfile} from './Src/Screens/ScreenLists';
-import messaging from '@react-native-firebase/messaging';
+import {AuthNavigation, MainNavigation} from './Src/Screens/ScreenLists';
+import {getMessaging, onMessage, onNotificationOpenedApp, getInitialNotification, isDeviceRegisteredForRemoteMessages, registerDeviceForRemoteMessages} from '@react-native-firebase/messaging';
 import notifee from '@notifee/react-native';
 
-function App(): React.JSX.Element {
-  
-
-  const notificationListener = () => {
-    // App opened from background
-    messaging().onNotificationOpenedApp(remoteMessage => {
-      console.log(
-        'Notification caused app to open from background:',
-        remoteMessage.notification,
-      );
-    });
-
-    // App opened from quit state
-    messaging()
-      .getInitialNotification()
-      .then(remoteMessage => {
-        if (remoteMessage) {
-          console.log(
-            'App opened from quit state:',
-            remoteMessage.notification,
-          );
-        }
-      });
-  };
-
+function App() {
+  // Create Android channel once (before displaying notifications)
   useEffect(() => {
-    const unsubscribe = messaging().onMessage(async remoteMessage => {
-      console.log('🔔 Foreground FCM:', remoteMessage);
+    (async () => {
+      await notifee.createChannel({
+        id: 'default',
+        name: 'Default',
+        importance: 3, // Importance.HIGH
+      });
+    })();
+  }, []);
 
-      if (remoteMessage.notification) {
-        const {title, body} = remoteMessage.notification;
+  // Foreground FCM
+  useEffect(() => {
+    const msg = getMessaging();
 
+    // Ensure device is registered (mainly iOS or if you disabled auto-register)
+    (async () => {
+      const registered = await isDeviceRegisteredForRemoteMessages(msg);
+      if (!registered) {
+        await registerDeviceForRemoteMessages(msg);
+      }
+    })();
+
+    const unsubscribe = onMessage(msg, async remoteMessage => {
+      const {title, body} = remoteMessage.notification ?? {};
+      if (title || body) {
         await notifee.displayNotification({
-          title: title,
-          body: body,
-          android: {
-            channelId: 'default',
-            pressAction: {
-              id: 'default',
-            },
-          },
+          title: title ?? 'Notification',
+          body: body ?? '',
+          android: { channelId: 'default', pressAction: { id: 'default' } },
         });
       }
     });
@@ -70,14 +44,27 @@ function App(): React.JSX.Element {
     return unsubscribe;
   }, []);
 
+  // Background-opened / quit-opened handlers
   useEffect(() => {
-   
-    notificationListener();
+    const msg = getMessaging();
+
+    const unsubOpen = onNotificationOpenedApp(msg, remoteMessage => {
+      console.log('Notification opened app from background:', remoteMessage?.notification);
+    });
+
+    (async () => {
+      const rm = await getInitialNotification(msg);
+      if (rm) {
+        console.log('App opened from quit state:', rm.notification);
+      }
+    })();
+
+    return unsubOpen;
   }, []);
 
   const AppNavigator = () => {
     const {isLoggedIn} = useContext(AuthContext);
-    return isLoggedIn ? <MainNavigation /> : <AuthNavigation />;
+    return isLoggedIn ? <MainNavigation /> : <AuthNavigation/>;
   };
 
   return (
@@ -90,24 +77,5 @@ function App(): React.JSX.Element {
     </AuthProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  sectionContainer: {
-    marginTop: 32,
-    paddingHorizontal: 24,
-  },
-  sectionTitle: {
-    fontSize: 24,
-    fontWeight: '600',
-  },
-  sectionDescription: {
-    marginTop: 8,
-    fontSize: 18,
-    fontWeight: '400',
-  },
-  highlight: {
-    fontWeight: '700',
-  },
-});
 
 export default App;

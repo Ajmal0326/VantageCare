@@ -12,7 +12,7 @@ import {
   Platform,
   PermissionsAndroid,
 } from 'react-native';
-import React, {useContext, useEffect, useState} from 'react';
+import React, {useCallback, useContext, useEffect, useState} from 'react';
 import {
   widthPercentageToDP as wp,
   heightPercentageToDP as hp,
@@ -24,6 +24,7 @@ import {ROUTES} from '../Constants';
 import {AuthContext} from '../Contexts/AuthContext';
 import {UserContext} from '../Contexts/UserContext';
 import messaging from '@react-native-firebase/messaging';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons'; // 👈
 
 const Login = () => {
   const navigation = useNavigation();
@@ -33,6 +34,9 @@ const Login = () => {
   const {setIsLoggedIn} = useContext(AuthContext);
   const {setUserName, setUserRole,setUserID} = useContext(UserContext);
   const [fcmtoken, setfcmtoken] = useState();
+  const toggleHide = useCallback(() => setHidePass(p => !p), []);
+  const [hidePass, setHidePass] = useState(true); // 👈
+
   const requestUserPermission = async () => {
     // const authStatus = await messaging().requestPermission();
     // const enabled =
@@ -176,16 +180,34 @@ const Login = () => {
           style={styles.input}
           onChangeText={onChangeUserId}
           value={UserId}
-          placeholder="UserID"
+          placeholder="Username"
           placeholderTextColor={'black'}
         />
-        <TextInput
-          style={styles.input}
-          onChangeText={onChangepassword}
-          value={password}
-          placeholder="Password"
-          placeholderTextColor={'black'}
-        />
+      
+        
+         <View style={{position: 'relative', justifyContent: 'center'}}>
+          <TextInput
+            style={[styles.input, {paddingRight: 44}]}  
+            onChangeText={onChangepassword}
+            value={password}
+            placeholder="Password"
+            placeholderTextColor="black"
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry={hidePass}              
+            textContentType="password"
+            returnKeyType="done"
+          />
+
+          <TouchableOpacity
+            onPress={toggleHide}
+            accessibilityLabel={hidePass ? 'Show password' : 'Hide password'}
+            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+            style={{position: 'absolute', right: 25, height: '100%', justifyContent: 'center'}}
+          >
+            <Icon name={hidePass ? 'eye-off' : 'eye'} size={22} />
+          </TouchableOpacity>
+        </View>
         <TouchableOpacity
           onPress={() => {
             if (UserId) {
