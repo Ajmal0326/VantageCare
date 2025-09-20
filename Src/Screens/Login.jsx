@@ -227,7 +227,7 @@ const Login = () => {
             hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
             style={{position: 'absolute', right: 25, height: '100%', justifyContent: 'center'}}
           >
-            <Icon name={hidePass ? 'eye-off' : 'eye'} size={22} />
+            <Icon name={hidePass ? 'eye-off' : 'eye'} size={22} color="#333" />
           </TouchableOpacity>
         </View>
 
